@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# srafq 0.0.1 — SRA/ENA FASTQ fetcher (Aspera + fasterq-dump only; HTTP removed)
+# - ENA metadata resolve, layout inference, MD5 verify
+# - Aspera preferred; fallback to fasterq-dump (--split-files for PAIRED)
+# - Clean ^C/TERM/HUP shutdown + per-OUTDIR flock
+# - Install: conda install -y -c hcc aspera-cli
+
+set -Euo pipefail
+set -o errtrace
+trap 's=$?; echo "[ERR] status=$s line=$LINENO cmd: $BASH_COMMAND" >&2' ERR
+
+: "${RESUME_MODE:=skip}"             # skip|force
+: "${THREADS:=4}"                    # fasterq-dump / pigz threads
+: "${SKIP_TECHNICAL:=false}"         # fasterq-dump --skip-technical
+: "${RETRIES:=3}"                    # per-file retries
+: "${ASCP_BIN:=$(command -v ascp 2>/dev/null || echo ascp)}"
+: "${ASCP_KEY:=}"                    # DSA key path (wrapperなら空でもOK)
+: "${ASCP_LIMIT_M:=}"                # e.g., 150m (≈150 megabits/s)
+: "${LAYOUT_MODE:=}"                 # force PAIRED|SINGLE
+: "${DEBUG:=0}"                      # 1 → set -x
+(( DEBUG == 1 )) && set -x
+
+# ---------- utils ----------
+is_exe(){ command -v "$1" >/dev/null 2>&1; }
+now(){ date +"%H:%M:%S"; }
+log(){ local ts lvl; ts="$(now)"; lvl="$1"; shift
+  [[ -n "${LOGFILE:-}" ]] && printf '[%s] [%s] %s\n' "$ts" "$lvl" "$*" | tee -a "$LOGFILE" >&2 \
+                           || printf '[%s] [%s] %s\n' "$ts" "$lvl" "$*" >&2; }
+mkd(){ for d in "$@"; do [[ -d "$d" ]] || mkdir -p "$d"; done; }
+need(){ command -v "$1" >/dev/null 2>&1 || { echo "missing: $1" >&2; exit 127; }; }
+md5of(){ if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | awk '{print $1}'; else openssl dgst -md5 -r "$1" | awk '{print $1}'; fi; }
+
+cleanup(){ log WRN "Caught signal — cancelling child jobs..."; pkill -TERM -P $$ 2>/dev/null || true; sleep 0.3; pkill -KILL -P $$ 2>/dev/null || true; exit 130; }
+trap cleanup INT TERM HUP
+
+looks_like_r1(){ local b="${1##*/}"; b="${b##*:}"; [[ "$b" =~ (^|[_\.])R?1([^0-9]|$) ]] && [[ "$b" =~ \.f(ast)?q(\.gz)?$ ]]; }
+maybe_force_paired(){ local u; for u in "$@"; do [[ -n "$u" ]] || continue;
+  if looks_like_r1 "$u"; then [[ "$LAYOUT" != PAIRED ]] && { LAYOUT=PAIRED; log WRN "layout override: detected R1-like filename → PAIRED"; }; return 0; fi; done; }
+
+# ---------- failure / retry listing ----------
+FAIL_TSV=""; RETRY_LIST="";
+fail_add_acc(){ local acc="$1"; [[ -n "$RETRY_LIST" ]] && echo "$acc" >>"$RETRY_LIST.tmp"; }
+fail_add_file(){ # ts,acc,stage,name,exp_md5,got_md5,url
+  local acc="$1" stage="$2" name="$3" exp="$4" got="$5" url="$6"
+  [[ -n "$FAIL_TSV" ]] && printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$(date -Iseconds 2>/dev/null || date +%F\ %T)" "$acc" "$stage" "$name" "${exp:-}" "${got:-}" "${url:-}" >>"$FAIL_TSV"
+}
+fail_finalize(){
+  [[ -n "$RETRY_LIST" ]] || return 0
+  if [[ -s "$RETRY_LIST.tmp" ]]; then sort -u "$RETRY_LIST.tmp" >"$RETRY_LIST"; rm -f "$RETRY_LIST.tmp"
+  else : >"$RETRY_LIST"; fi
+  if [[ -s "$FAIL_TSV" ]]; then
+    local n=$(wc -l <"$FAIL_TSV"); n=$(( n>0 ? n-1 : 0 ))
+    log WRN "Failures recorded: $n rows → $FAIL_TSV ; accessions → $RETRY_LIST"
+  fi
+}
+
+# ---------- help ----------
+print_config(){
+cat <<CFG
+# Effective settings
+RESUME_MODE=$RESUME_MODE
+THREADS=$THREADS
+SKIP_TECHNICAL=$SKIP_TECHNICAL
+RETRIES=$RETRIES
+ASCP_BIN=${ASCP_BIN}
+ASCP_KEY=${ASCP_KEY:-none}
+ASCP_LIMIT_M=${ASCP_LIMIT_M:-none}
+LAYOUT_MODE=${LAYOUT_MODE:-none}
+DEBUG=$DEBUG
+CFG
+}
+usage(){ cat <<USAGE
+Usage: $(basename "$0") -i ACCESSION_LIST -o OUTDIR
+Options:
+  -h, --help          Short help
+      --help-long     Show detailed help incl. env and examples
+      --show-env      Print effective settings and exit
+      --version       Print version and exit
+USAGE
+}
+help_long(){ cat <<'HLP'
+srafq 0.0.1 — SRA/ENA FASTQ downloader (Aspera + fasterq-dump only)
+  Install Aspera: conda install -y -c hcc aspera-cli
+
+ENV
+  RESUME_MODE=skip|force  THREADS=N  SKIP_TECHNICAL=true|false  RETRIES=N
+  ASCP_BIN=PATH  ASCP_KEY=PATH  ASCP_LIMIT_M=RATE  LAYOUT_MODE=PAIRED|SINGLE  DEBUG=1
+HLP
+}
+
+# ---------- ENA lookup ----------
+LAYOUT="UNKNOWN"; declare -a FTP_URLS ASPERA_URLS MD5S
+ena_lookup(){
+  local acc="$1" url qs tsv rc=0
+  LAYOUT="UNKNOWN"; FTP_URLS=(); ASPERA_URLS=(); MD5S=()
+  url="https://www.ebi.ac.uk/ena/portal/api/filereport"
+  qs="accession=${acc}&result=read_run&fields=fastq_ftp,fastq_aspera,fastq_md5,library_layout&format=tsv&download=false"
+  for _ in 1 2 3; do tsv="$(curl -fsSL "${url}?${qs}" 2>/dev/null || true)"; rc=$?; [[ $rc -eq 0 && -n "$tsv" ]] && break; sleep 1; done
+  if [[ $rc -ne 0 || -z "$tsv" ]]; then log WRN "${acc}: ENA filereport unavailable"; return 1; fi
+  local header row; header="$(printf '%s\n' "$tsv" | sed -n '1p')"; row="$(printf '%s\n' "$tsv" | sed -n '2p')"
+  [[ -z "$row" ]] && { log WRN "${acc}: ENA row empty"; return 1; }
+  IFS=$'\t' read -r -a H <<<"$header"; IFS=$'\t' read -r -a V <<<"$row"; declare -A IDX=(); local i
+  for i in "${!H[@]}"; do IDX["${H[$i]}"]="$i"; done
+  getcol(){ local key="$1"; local j="${IDX[$key]:-}"; [[ -n "$j" ]] && printf '%s' "${V[$j]}" || printf ''; }
+  local ftp ascp md5 layout; ftp="$(getcol fastq_ftp)"; ascp="$(getcol fastq_aspera)"; md5="$(getcol fastq_md5)"; layout="$(getcol library_layout)"
+  [[ -n "$ftp"  ]] && IFS=';' read -r -a FTP_URLS    <<<"$ftp"
+  [[ -n "$ascp" ]] && IFS=';' read -r -a ASPERA_URLS <<<"$ascp"
+  [[ -n "$md5"  ]] && IFS=';' read -r -a MD5S        <<<"$md5"
+  case "${layout^^}" in PAIRED|SINGLE) LAYOUT="${layout^^}";; *) LAYOUT="UNKNOWN";; esac
+  if [[ "$LAYOUT" == "UNKNOWN" ]]; then local hn=${#FTP_URLS[@]} an=${#ASPERA_URLS[@]}; (( an>=2 || hn>=2 )) && LAYOUT="PAIRED"; fi
+  log INF "${acc} layout=${LAYOUT}  ftp=${#FTP_URLS[@]} aspera=${#ASPERA_URLS[@]}"
+  return 0
+}
+
+# ---------- transfers ----------
+prefix_era(){ local s="$1"; [[ "$s" == fasp.sra.ebi.ac.uk:* ]] && echo "era-fasp@$s" || echo "$s"; }
+
+# ascp_fetch(remote, outdir, name, exp_md5, acc)
+ascp_fetch(){
+  local remote="$1" d="$2" name="$3" exp="${4:-}" acc="${5:-}"
+  mkd "$d"; remote="$(prefix_era "$remote")"
+  local attempt=1 got srcname
+
+  # 事前チェック：既存ファイルのMD5が不一致なら削除してクリーン再取得
+  if [[ -n "$exp" && -f "$d/$name" ]]; then
+    got="$(md5of "$d/$name")"
+    if [[ "$got" != "$exp" ]]; then
+      log WRN "MD5 NG (pre): $name (got=$got exp=$exp) — removing before retry"
+      fail_add_file "$acc" "ascp-pre" "$name" "$exp" "$got" "$remote"
+      rm -f "$d/$name"
+    else
+      log INF "MD5 OK: $name (pre)"
+      return 0
+    fi
+  fi
+
+  while (( attempt <= RETRIES )); do
+    log INF "[ascp] -> ${name} (attempt ${attempt}/${RETRIES})"
+    "$ASCP_BIN" -QT -k1 -P 33001 ${ASCP_LIMIT_M:+-l "$ASCP_LIMIT_M"} ${ASCP_KEY:+-i "$ASCP_KEY"} "$remote" "$d"/
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+      srcname="$(basename "${remote##*:}")"
+      [[ -f "$d/$srcname" && "$srcname" != "$name" ]] && mv -f "$d/$srcname" "$d/$name"
+      if [[ -n "$exp" ]]; then
+        got="$(md5of "$d/$name")"
+        if [[ "$got" == "$exp" ]]; then
+          log INF "MD5 OK: $name"
+          return 0
+        else
+          log WRN "MD5 NG: $name (got=$got exp=$exp) — removing and retrying"
+          fail_add_file "$acc" "ascp-md5" "$name" "$exp" "$got" "$remote"
+          rm -f "$d/$name"
+          ((attempt++)); sleep 1; continue
+        fi
+      else
+        return 0
+      fi
+    else
+      log WRN "[ascp] failed (rc=$rc)"
+    fi
+    ((attempt++)); sleep 1
+  done
+  return 1
+}
+
+run_fasterq(){ local acc="$1" odir="$2"; mkd "$odir" "$OUTDIR/.tmp/$acc"
+  local -a args=( --threads "$THREADS" --temp "$OUTDIR/.tmp/$acc" --outdir "$odir" )
+  [[ "$SKIP_TECHNICAL" == true ]] && args+=( --skip-technical )
+  [[ "$LAYOUT" == PAIRED ]] && args+=( --split-files )
+  log INF "[fasterq] ${args[*]} ${acc}"; fasterq-dump "${args[@]}" "$acc"
+  if command -v pigz >/dev/null 2>&1; then find "$odir" -maxdepth 1 -type f -name '*.fastq' -print0 | xargs -0 -r -n1 pigz -p "$THREADS"; else find "$odir" -maxdepth 1 -type f -name '*.fastq' -print0 | xargs -0 -r -n1 gzip; fi
+}
+
+# ---------- main ----------
+main(){
+  local INPUT=""; OUTDIR=""
+  while [[ $# -gt 0 ]]; do case "$1" in
+    -i|--input)  INPUT="$2"; shift 2;;
+    -o|--outdir|--output) OUTDIR="$2"; shift 2;;
+    -h|--help) usage; exit 0;;
+    --help-long) help_long; exit 0;;
+    --show-env) print_config; exit 0;;
+    --version) echo "srafq 0.0.1"; exit 0;;
+    *) echo "unknown arg: $1" >&2; usage; exit 2;;
+  esac; done
+  [[ -z "$INPUT" || -z "$OUTDIR" ]] && { usage; exit 2; }
+
+  need curl; need awk; need sed; need grep
+  mkd "$OUTDIR"; LOGFILE="$OUTDIR/srafq.log"; : >"$LOGFILE"
+
+  # retry/failed files
+  FAIL_TSV="$OUTDIR/srafq.failed.tsv"
+  RETRY_LIST="$OUTDIR/srafq.retry.txt"
+  printf "ts\tacc\tstage\tname\texp_md5\tgot_md5\turl\n" >"$FAIL_TSV"
+  : >"$RETRY_LIST.tmp"
+  trap fail_finalize EXIT
+
+  # single-writer lock per OUTDIR
+  exec 9>"$OUTDIR/.srafq.lock"
+  if ! flock -n 9; then log ERR "Another srafq is already running for OUTDIR=$OUTDIR"; exit 9; fi
+
+  log INF "srafq 0.0.1"
+  log INF "OUTDIR=${OUTDIR}  RESUME_MODE=${RESUME_MODE}"
+  log INF "ASCP_BIN=${ASCP_BIN}  ASCP_KEY=${ASCP_KEY:-none}  ASCP_LIMIT_M=${ASCP_LIMIT_M:-none}"
+  log INF "THREADS=${THREADS}  SKIP_TECHNICAL=${SKIP_TECHNICAL}  RETRIES=${RETRIES}"
+
+  mapfile -t ACCS < <(awk 'NF && $1 !~ /^#/' "$INPUT") || ACCS=()
+  for acc in "${ACCS[@]}"; do log INF "First: ${acc}"; done
+  log INF "Accessions: ${#ACCS[@]}"
+
+  local use_ascp=false
+  if is_exe "$ASCP_BIN"; then use_ascp=true; fi
+
+  for acc in "${ACCS[@]}"; do
+    log INF "Resolving ${acc} via ENA"
+    if ! ena_lookup "$acc"; then log WRN "${acc}: ENA lookup failed; will use fasterq-dump"; LAYOUT="${LAYOUT_MODE:-UNKNOWN}"; FTP_URLS=(); ASPERA_URLS=(); MD5S=(); fi
+    [[ -n "$LAYOUT_MODE" ]] && { LAYOUT="$LAYOUT_MODE"; log WRN "LAYOUT forced: ${LAYOUT_MODE}"; }
+    maybe_force_paired "${FTP_URLS[@]+"${FTP_URLS[@]}"}" "${ASPERA_URLS[@]+"${ASPERA_URLS[@]}"}"
+
+    local odir="${OUTDIR}/${acc}"; mkd "$odir"
+    local ftp_n=${#FTP_URLS[@]} ascp_n=${#ASPERA_URLS[@]} mode=""
+
+    # Decision rules (HTTP無し)
+    if [[ "$LAYOUT" == "PAIRED" ]]; then
+      if $use_ascp && (( ascp_n >= 2 )); then mode="aspera_paired"; else mode="fqdump_split"; fi
+    elif [[ "$LAYOUT" == "UNKNOWN" ]]; then
+      if $use_ascp && (( ascp_n >= 2 )); then mode="aspera_paired"; else mode="fqdump_split"; fi
+    else
+      if $use_ascp && (( ascp_n >= 1 )); then mode="aspera_single"; else mode="fqdump"; fi
+    fi
+
+    log INF "mode=${mode}  ascp=${ASCP_BIN}  key=${ASCP_KEY:-none}"
+
+    case "$mode" in
+      aspera_paired)
+        local u1="${ASPERA_URLS[0]}" u2="${ASPERA_URLS[1]}" m1="${MD5S[0]:-}" m2="${MD5S[1]:-}"
+        local n1 n2; n1="$(basename "${u1##*:}")"; n2="$(basename "${u2##*:}")"
+        [[ -z "$n1" ]] && n1="${acc}_1.fastq.gz"; [[ -z "$n2" ]] && n2="${acc}_2.fastq.gz"
+        if [[ "$RESUME_MODE" == skip && -f "$odir/$n1" && -f "$odir/$n2" ]]; then
+          if [[ -z "$m1$m2" || "$(md5of "$odir/$n1")" == "$m1" && "$(md5of "$odir/$n2")" == "$m2" ]]; then log INF "${acc}: files present (skip)"; continue; fi; fi
+        if ! ascp_fetch "$u1" "$odir" "$n1" "$m1" "$acc"; then
+          local got="$( [[ -f "$odir/$n1" ]] && md5of "$odir/$n1" || echo - )"
+          fail_add_file "$acc" "ascp-final" "$n1" "${m1:-}" "$got" "$u1"; fail_add_acc "$acc"
+        fi
+        if ! ascp_fetch "$u2" "$odir" "$n2" "$m2" "$acc"; then
+          local got="$( [[ -f "$odir/$n2" ]] && md5of "$odir/$n2" || echo - )"
+          fail_add_file "$acc" "ascp-final" "$n2" "${m2:-}" "$got" "$u2"; fail_add_acc "$acc"
+        fi
+        ;;
+      aspera_single)
+        local u="${ASPERA_URLS[0]}" m="${MD5S[0]:-}" n; n="$(basename "${u##*:}")"; [[ -z "$n" ]] && n="${acc}.fastq.gz"
+        if [[ "$RESUME_MODE" == skip && -f "$odir/$n" ]]; then
+          if [[ -z "$m" || "$(md5of "$odir/$n")" == "$m" ]]; then
+            if [[ "$LAYOUT" == PAIRED ]]; then log WRN "${acc}: PAIRED but single URL; fasterq --split-files"; if ! run_fasterq "$acc" "$odir"; then fail_add_file "$acc" "fasterq" "-" "-" "-" "-"; fail_add_acc "$acc"; fi; continue
+            else log INF "${acc}: present (skip)"; continue; fi
+          fi; fi
+        if ! ascp_fetch "$u" "$odir" "$n" "$m" "$acc"; then
+          local got="$( [[ -f "$odir/$n" ]] && md5of "$odir/$n" || echo - )"
+          fail_add_file "$acc" "ascp-final" "$n" "${m:-}" "$got" "$u"; fail_add_acc "$acc"
+        fi
+        [[ "$LAYOUT" == PAIRED ]] && { log WRN "${acc}: PAIRED but single URL; fasterq --split-files"; if ! run_fasterq "$acc" "$odir"; then fail_add_file "$acc" "fasterq" "-" "-" "-" "-"; fail_add_acc "$acc"; fi; }
+        ;;
+      fqdump_split) if ! run_fasterq "$acc" "$odir"; then fail_add_file "$acc" "fasterq" "-" "-" "-" "-"; fail_add_acc "$acc"; fi ;;
+      fqdump)       if ! run_fasterq "$acc" "$odir"; then fail_add_file "$acc" "fasterq" "-" "-" "-" "-"; fail_add_acc "$acc"; fi ;;
+      *) log ERR "unknown mode: $mode"; exit 2;;
+    esac
+  done
+}
+main "$@"
