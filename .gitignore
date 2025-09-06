@@ -1,0 +1,8 @@
+data/
+.tmp/
+.srafq.lock
+*.log
+*.sra
+*.fastq.gz
+.DS_Store
+Thumbs.db
