@@ -221,7 +221,7 @@ main(){
     maybe_force_paired "${FTP_URLS[@]+"${FTP_URLS[@]}"}" "${ASPERA_URLS[@]+"${ASPERA_URLS[@]}"}"
 
     local odir="${OUTDIR}/${acc}"; mkd "$odir"
-    local ftp_n=${#FTP_URLS[@]} ascp_n=${#ASPERA_URLS[@]} mode=""
+    local ascp_n=${#ASPERA_URLS[@]} mode=""
 
     # Decision rules (HTTP無し)
     if [[ "$LAYOUT" == "PAIRED" ]]; then
