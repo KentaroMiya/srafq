@@ -1,5 +1,7 @@
 # srafq 0.0.1 — Robust SRA/ENA FASTQ Fetcher (Linux Only)
 
+![ShellCheck](https://github.com/KentaroMiya/srafq/actions/workflows/shellcheck.yml/badge.svg)
+
 > **srafq** resolves SRR/DRR/ERR accessions via ENA and downloads FASTQ files.  
 > It prefers **Aspera (ascp)** when available and **falls back to SRA Tools (`fasterq-dump`)**.  
 > **No direct HTTP/FTP file downloads are used** in this version (HTTP is used only to query ENA metadata).
