@@ -50,7 +50,9 @@ fail_finalize(){
   if [[ -s "$RETRY_LIST.tmp" ]]; then sort -u "$RETRY_LIST.tmp" >"$RETRY_LIST"; rm -f "$RETRY_LIST.tmp"
   else : >"$RETRY_LIST"; fi
   if [[ -s "$FAIL_TSV" ]]; then
-    local n=$(wc -l <"$FAIL_TSV"); n=$(( n>0 ? n-1 : 0 ))
+    local n
+n=20 20 12 61 79 80 81 98 706 701 702 703 33 100 204 250 704wc -l <"")
+n=20 20 12 61 79 80 81 98 706 701 702 703 33 100 204 250 704( n>0 ? n-1 : 0 ))
     log WRN "Failures recorded: $n rows → $FAIL_TSV ; accessions → $RETRY_LIST"
   fi
 }
@@ -240,11 +242,21 @@ main(){
         if [[ "$RESUME_MODE" == skip && -f "$odir/$n1" && -f "$odir/$n2" ]]; then
           if [[ -z "$m1$m2" || "$(md5of "$odir/$n1")" == "$m1" && "$(md5of "$odir/$n2")" == "$m2" ]]; then log INF "${acc}: files present (skip)"; continue; fi; fi
         if ! ascp_fetch "$u1" "$odir" "$n1" "$m1" "$acc"; then
-          local got="$( [[ -f "$odir/$n1" ]] && md5of "$odir/$n1" || echo - )"
+          local got
+if [[ -f "/" ]]; then
+  got="20 20 12 61 79 80 81 98 706 701 702 703 33 100 204 250 704md5of "/")"
+else
+  got="-"
+fi
           fail_add_file "$acc" "ascp-final" "$n1" "${m1:-}" "$got" "$u1"; fail_add_acc "$acc"
         fi
         if ! ascp_fetch "$u2" "$odir" "$n2" "$m2" "$acc"; then
-          local got="$( [[ -f "$odir/$n2" ]] && md5of "$odir/$n2" || echo - )"
+          local got
+if [[ -f "/" ]]; then
+  got="20 20 12 61 79 80 81 98 706 701 702 703 33 100 204 250 704md5of "/")"
+else
+  got="-"
+fi
           fail_add_file "$acc" "ascp-final" "$n2" "${m2:-}" "$got" "$u2"; fail_add_acc "$acc"
         fi
         ;;
@@ -256,7 +268,12 @@ main(){
             else log INF "${acc}: present (skip)"; continue; fi
           fi; fi
         if ! ascp_fetch "$u" "$odir" "$n" "$m" "$acc"; then
-          local got="$( [[ -f "$odir/$n" ]] && md5of "$odir/$n" || echo - )"
+          local got
+if [[ -f "/" ]]; then
+  got="20 20 12 61 79 80 81 98 706 701 702 703 33 100 204 250 704md5of "/")"
+else
+  got="-"
+fi
           fail_add_file "$acc" "ascp-final" "$n" "${m:-}" "$got" "$u"; fail_add_acc "$acc"
         fi
         [[ "$LAYOUT" == PAIRED ]] && { log WRN "${acc}: PAIRED but single URL; fasterq --split-files"; if ! run_fasterq "$acc" "$odir"; then fail_add_file "$acc" "fasterq" "-" "-" "-" "-"; fail_add_acc "$acc"; fi; }
