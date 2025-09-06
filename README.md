@@ -89,9 +89,9 @@ export ASCP_BIN="$(command -v ascp-forcekey)"   # otherwise leave unset to auto-
 
 2. Run srafq:
    ```bash
-　# Typical run with bandwidth cap and more threads
-　export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
-　ASCP_LIMIT_M=150m THREADS=8 ./srafq -i SRR_List.txt -o data
+ # Typical run with bandwidth cap and more threads
+ export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
+ ASCP_LIMIT_M=150m THREADS=8 ./srafq -i SRR_List.txt -o data
 
    # Aspera disabled (SRA Tools only via fasterq-dump)
    ASCP_BIN=none THREADS=8 ./srafq -i SRR_List.txt -o data
