@@ -1,5 +1,7 @@
 # srafq 0.0.1 — Robust SRA/ENA FASTQ Fetcher (Linux Only)
 
+[![DOI](https://zenodo.org/badge/1051496282.svg)](https://doi.org/10.5281/zenodo.17067028)
+
 ![ShellCheck](https://github.com/KentaroMiya/srafq/actions/workflows/shellcheck.yml/badge.svg)
 
 > **srafq** resolves SRR/DRR/ERR accessions via ENA and downloads FASTQ files.  
