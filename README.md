@@ -1,56 +1,32 @@
-# srafq 0.0.1 — Robust SRA/ENA FASTQ Fetcher (Linux Only)
+# srafq 0.0.1 — Robust SRA/ENA FASTQ fetcher (Aspera‑first; `fasterq-dump` fallback)
 
-[![DOI](https://zenodo.org/badge/1051496282.svg)](https://doi.org/10.5281/zenodo.17067028)
+**srafq** takes a list of SRA accessions (SRR/DRR/ERR), resolves metadata via ENA, and downloads the FASTQ files safely.
+It prefers **Aspera (ascp)** whenever available and falls back to **`fasterq-dump`**. HTTP/aria2 is intentionally **disabled** in this version.
 
-![ShellCheck](https://github.com/KentaroMiya/srafq/actions/workflows/shellcheck.yml/badge.svg)
-
-> **srafq** resolves SRR/DRR/ERR accessions via ENA and downloads FASTQ files.  
-> It prefers **Aspera (ascp)** when available and **falls back to SRA Tools (`fasterq-dump`)**.  
-> **No direct HTTP/FTP file downloads are used** in this version (HTTP is used only to query ENA metadata).
-
-<p align="left">
-  <img alt="linux-only" src="https://img.shields.io/badge/OS-Linux-only" />
-  <img alt="bash>=4" src="https://img.shields.io/badge/Bash-%E2%89%A54-blue" />
-  <img alt="ascp-optional" src="https://img.shields.io/badge/Aspera-optional-lightgrey" />
-</p>
-
----
-
-## Features
-- ENA filereport lookup (HTTP metadata only) and layout detection (PAIRED/SINGLE)
-- **Aspera-first** transfer; automatic retry & MD5 verification (when available)
-- **Fallback** to `fasterq-dump` (SRA Tools) if Aspera is unavailable
-- Integrity checks (`pigz -t`/`gzip -t`) when MD5 is not provided
-- Resume behavior (`RESUME_MODE=skip` by default)
-- Simple logs & retry list generation
-
----
-
-## Installation (Conda)
-
-### Minimal (works out of the box)
+## Install (conda)
 ```bash
-mamba create -n srafq -c conda-forge -c bioconda sra-tools pigz curl -y  || conda create -n srafq -c conda-forge -c bioconda sra-tools pigz curl -y
+# Create and activate an environment
+mamba create -n srafq -c conda-forge -c bioconda sra-tools pigz curl flock ||     conda  create -n srafq -c conda-forge -c bioconda sra-tools pigz curl flock
 conda activate srafq
+
+# Aspera CLI (includes ascp v3 and the DSA key)
+conda install -y hcc::aspera-cli
+# (equivalently) conda install -y -c hcc aspera-cli
 ```
 
-- **sra-tools**: required for `fasterq-dump` fallback (core path without Aspera)  
-- **pigz**: fast compression & `-t` integrity check (falls back to `gzip` if absent)  
-- **curl**: **only used to query ENA metadata** (not for file transfers)
-
-### Aspera (ascp) — optional but recommended for speed
-Install one of the following if you want Aspera transfers:
+## Prepare the script
+Save the srafq script in this repository to your working directory and make it executable:
 ```bash
-# Conda package (Linux):
-conda install -y hcc::aspera-cli  # or: conda install -y -c hcc aspera-cli
+chmod +x ./srafq
 ```
 
-Then set the key (often bundled in the conda env):
+### Aspera key and (optional) wrapper
+Most installations ship the Aspera DSA key inside your conda env:
 ```bash
 export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
+head -n1 "$ASCP_KEY"   # should print: -----BEGIN DSA PRIVATE KEY-----
 chmod 600 "$ASCP_KEY"
 ```
-
 A tiny wrapper ensures your key is always used, even if downstream tools drop -i:
 ```bash
 mkdir -p ~/bin
@@ -71,69 +47,24 @@ SH
 chmod +x ~/bin/ascp-forcekey
 export ASCP_BIN="$(command -v ascp-forcekey)"   # otherwise leave unset to auto-detect `ascp`
 ```
-> If you **do not** want Aspera, set `ASCP_BIN=none` at run time and srafq will use **SRA Tools only**.
 
----
-
-## Quick Start
-
-1. Prepare a plain-text list of accessions (one per line, `#` lines are ignored), e.g.
-   ```text
-   SRR10479824
-   SRR10479825
-   DRR502916
-   SRR14715112
-   ```
-   If the file came from Windows, normalize line endings:
-   ```bash
-   sed -i 's/\r$//' SRR_List.txt
-   ```
-
-2. Run srafq:
-
-### Typical run with bandwidth cap and more threads
+## Quick start
+Put accessions (one per line) in `SRR_List.txt` (lines starting with `#` are ignored). Normalize CRLF if needed:
 ```bash
-export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
+sed -i 's/\r$//' SRR_List.txt
+```
+
+Run:
+```bash
 ASCP_LIMIT_M=150m THREADS=8 ./srafq -i SRR_List.txt -o data
 ```
-
-### Aspera disabled (SRA Tools only via fasterq-dump)
-```bash
-ASCP_BIN=none THREADS=8 ./srafq -i SRR_List.txt -o data
-```
-
-### Force layout and re-fetch
-```bash
-LAYOUT_MODE=PAIRED RESUME_MODE=force ./srafq -i SRR_List.txt -o data
-```
-
-### If some accessions failed, retry with more attempts
-```bash
-RETRIES=5 ./srafq -i data/srafq.retry.txt -o data
-```
-   ```bash
- # Typical run with bandwidth cap and more threads
- export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
- ASCP_LIMIT_M=150m THREADS=8 ./srafq -i SRR_List.txt -o data
-
-   # Aspera disabled (SRA Tools only via fasterq-dump)
-   ASCP_BIN=none THREADS=8 ./srafq -i SRR_List.txt -o data
-   
-   # Force layout and re-fetch
-   LAYOUT_MODE=PAIRED RESUME_MODE=force ./srafq -i SRR_List.txt -o data
-   
-   # If some accessions failed, retry with more attempts
-   RETRIES=5 ./srafq -i data/srafq.retry.txt -o data
-   ```
-
----
 
 ## CLI
 ```text
 Usage: srafq -i ACCESSION_LIST -o OUTDIR
 
 Options:
-  -i, --input FILE        Accession list (SRR/DRR/ERR per line)
+  -i, --input FILE        Accession list file (one SRR/DRR/ERR per line)
   -o, --outdir DIR        Output directory
   -h, --help              Short help
       --help-long         Detailed help (env, modes, outputs, examples)
@@ -141,61 +72,53 @@ Options:
       --version           Print version and exit
 ```
 
-### Key Environment Variables (Linux)
-| Variable        | Default   | Description |
-| --------------- | --------- | ----------- |
-| `RESUME_MODE`   | `skip`    | Skip re-downloading if files look OK (`force` to re-download) |
-| `THREADS`       | `4`       | Threads for `fasterq-dump` and `pigz` |
-| `SKIP_TECHNICAL`| `false`   | Adds `--skip-technical` to `fasterq-dump` |
-| `RETRIES`       | `3`       | Retries on transfer/integrity failure |
-| `ASCP_BIN`      | autodetect| Path to `ascp` (unset/invalid → Aspera not used) |
-| `ASCP_KEY`      | _(unset)_ | DSA key (e.g. `$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh`) |
-| `ASCP_LIMIT_M`  | _(unset)_ | Bandwidth cap, e.g. `150m` (~150 Mbit/s) |
-| `LAYOUT_MODE`   | _(unset)_ | Force `PAIRED` or `SINGLE` if needed |
-| `DEBUG`         | `0`       | Set `1` to enable `bash -x` tracing |
+### Environment variables
+| Variable | Default | Description |
+|---|---|---|
+| `RESUME_MODE` | `skip` | `skip` to keep valid files; `force` to re-fetch |
+| `THREADS` | `4` | Threads for `fasterq-dump` and `pigz` |
+| `SKIP_TECHNICAL` | `false` | When `true`, pass `--skip-technical` to `fasterq-dump` |
+| `RETRIES` | `3` | Per-file retries for transfer/MD5 mismatch |
+| `ASCP_BIN` | auto `ascp` | Path/command to Aspera client (e.g. `ascp-forcekey`) |
+| `ASCP_KEY` | _(unset)_ | Path to Aspera DSA key (typ. `$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh`) |
+| `ASCP_LIMIT_M` | _(unset)_ | Bandwidth cap, e.g. `150m` (= ~150 megabits/s) |
+| `LAYOUT_MODE` | _(unset)_ | Force `PAIRED` or `SINGLE` layout |
+| `DEBUG` | `0` | `1` to enable `bash -x` tracing |
 
----
+## How it decides what to do
+1) Query ENA `filereport` for **fastq_aspera**, **fastq_md5**, **library_layout** (column‑order tolerant).  
+2) Determine layout:
+   - Use `library_layout` if it is `PAIRED` or `SINGLE`.
+   - If unknown, infer **PAIRED** if there are ≥2 Aspera URLs or the filename looks R1‑like (e.g. `_1.fastq.gz`).
+   - `LAYOUT_MODE=PAIRED|SINGLE` overrides everything.
+3) Choose a mode:
+   - `aspera_paired`   → if layout is `PAIRED` and ≥2 Aspera URLs
+   - `aspera_single`   → if layout is `SINGLE` and ≥1 Aspera URL
+   - `fqdump_split`    → otherwise when layout is `PAIRED` or `UNKNOWN`
+   - `fqdump`          → otherwise when layout is `SINGLE`
+4) After each Aspera transfer, verify MD5 (if provided). On mismatch the file is deleted and the transfer is retried up to `RETRIES` times.
+   - On final failure, the accession is appended to `OUTDIR/srafq.retry.txt` and details are recorded in `OUTDIR/srafq.failed.tsv`.
 
-## How It Works (high level)
-1. Query ENA `filereport` for `fastq_aspera`, `fastq_md5`, and `library_layout` (HTTP **metadata** only).  
-2. Determine layout: trust `library_layout` when present; otherwise infer from URLs/filenames. `LAYOUT_MODE` overrides all.  
-3. Choose execution mode:
-   - `aspera_paired` / `aspera_single` when Aspera URLs are available
-   - `fqdump_split` (PAIRED/UNKNOWN) or `fqdump` (SINGLE) when Aspera is not available
-4. After download, verify integrity with MD5 (if provided). On mismatch, remove and retry (up to `RETRIES`).  
-   If no MD5 is provided by ENA, fall back to `pigz -t`/`gzip -t` integrity check.
+## Signals, locking, and resume
+- Sending `Ctrl-C` stops child jobs cleanly and finalizes `srafq.retry.txt` / `srafq.failed.tsv`.
+- A per‑OUTDIR advisory flock prevents concurrent runs in the same output directory.
+- `RESUME_MODE=skip` avoids re-downloading when the expected MD5 already matches.
 
----
+## Examples
+```bash
+# Typical run with bandwidth cap and more threads
+export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
+ASCP_LIMIT_M=150m THREADS=8 ./srafq -i SRR_List.txt -o data
 
-## Troubleshooting (Linux)
+# Force layout and re-fetch
+LAYOUT_MODE=PAIRED RESUME_MODE=force ./srafq -i SRR_List.txt -o data
 
-### A. Aspera fails or UDP/33001 is blocked
-- Ensure `ascp` exists (`which ascp`) and key permissions are correct (`chmod 600 "$ASCP_KEY"`).  
-- If the network blocks Aspera (UDP/33001), run **SRA Tools only**:
-  ```bash
-  ASCP_BIN=none ./srafq -i SRR_List.txt -o data
-  ```
+# If some accessions failed, retry with more attempts
+RETRIES=5 ./srafq -i data/srafq.retry.txt -o data
 
-### B. `fasterq-dump` is slow or flaky
-- Use fast local scratch for temp/cache:
-  ```bash
-  export TMPDIR=/scratch/tmp_srafq
-  export PREFETCH_DIR=$HOME/ncbi/public/sra
-  mkdir -p "$TMPDIR" "$PREFETCH_DIR"
-  ```
-- Increase `THREADS` (and `PIGZ_THREADS`) while monitoring I/O.
-
-### C. No MD5 provided by ENA
-- We rely on `pigz -t`/`gzip -t` for a lightweight integrity check.
-- For stricter checks, compute `md5sum` manually after the run.
-
-### D. Re-running failures only
-- `OUTDIR/srafq.retry.txt` collects failures; re-run just those:
-  ```bash
-  RETRIES=5 ./srafq -i data/srafq.retry.txt -o data
-  ```
-
----
+# Inspect effective settings
+./srafq --show-env
+```
 
 ## Outputs
 ```
@@ -208,11 +131,5 @@ Options:
   .srafq.lock
 ```
 
----
-
 ## License
-See `LICENSE` for details.
-
-## Acknowledgements
-- ENA (EMBL-EBI) for programmatic access to metadata
-- NCBI SRA Tools team for `fasterq-dump`
+See `LICENSE`.
