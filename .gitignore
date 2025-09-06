@@ -7,3 +7,5 @@ data/
 .DS_Store
 Thumbs.db
 srafq.bak
+srafq.bak
+fix-shellcheck.patch
