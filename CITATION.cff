@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "srafq"
+version: "0.0.1"
+date-released: "2025-09-06"
+doi: "10.5281/zenodo.17067028"
+authors:
+  - family-names: "Miyamoto"
+    given-names: "Kentaro"
+repository-code: "https://github.com/KentaroMiya/srafq"
