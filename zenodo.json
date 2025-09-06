@@ -1,0 +1,18 @@
+{
+  "title": "srafq",
+  "upload_type": "software",
+  "license": "MIT",
+  "creators": [
+    {"name": "Miyamoto, Kentaro"}
+  ],
+  "description": "srafq is a tiny, Linux-only Bash helper to fetch SRA/ENA reads with Aspera (if available) and cleanly fall back to fasterq-dump. It resolves run metadata via ENA (HTTP, metadata only), creates sane per-accession folders, and records failures/retries.",
+  "language": "eng",
+  "related_identifiers": [
+    {
+      "relation": "isSupplementTo",
+      "identifier": "https://github.com/KentaroMiya/srafq",
+      "scheme": "url"
+    }
+  ],
+  "keywords": ["bioinformatics", "SRA", "ENA", "Aspera", "bash", "fasterq-dump"]
+}
