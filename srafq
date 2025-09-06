@@ -46,14 +46,12 @@ fail_add_file(){ # ts,acc,stage,name,exp_md5,got_md5,url
     "$(date -Iseconds 2>/dev/null || date +%F\ %T)" "$acc" "$stage" "$name" "${exp:-}" "${got:-}" "${url:-}" >>"$FAIL_TSV"
 }
 fail_finalize(){
-  [[ -n "$RETRY_LIST" ]] || return 0
-  if [[ -s "$RETRY_LIST.tmp" ]]; then sort -u "$RETRY_LIST.tmp" >"$RETRY_LIST"; rm -f "$RETRY_LIST.tmp"
-  else : >"$RETRY_LIST"; fi
-  if [[ -s "$FAIL_TSV" ]]; then
-    local n
-n=20 20 12 61 79 80 81 98 706 701 702 703 33 100 204 250 704wc -l <"")
-n=20 20 12 61 79 80 81 98 706 701 702 703 33 100 204 250 704( n>0 ? n-1 : 0 ))
-    log WRN "Failures recorded: $n rows → $FAIL_TSV ; accessions → $RETRY_LIST"
+  # Remove header row from count and delete file if no failures
+  local n
+  n=$(wc -l <"$FAIL_TSV")
+  n=$(( n>0 ? n-1 : 0 ))
+  if (( n == 0 )); then
+    rm -f "$FAIL_TSV"
   fi
 }
 
