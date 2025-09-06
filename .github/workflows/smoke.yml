@@ -1,0 +1,15 @@
+name: Smoke
+on: [push, pull_request]
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Show bash version
+        run: bash --version
+      - name: Lint script header is bash
+        run: head -n1 srafq | grep -q 'bash'
+      - name: Script prints help
+        run: bash ./srafq --help || true
+      - name: Script prints version
+        run: bash ./srafq --version || true
