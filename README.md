@@ -1,7 +1,7 @@
 # srafq 0.0.1 — Robust SRA/ENA FASTQ fetcher (Aspera‑first; `fasterq-dump` fallback)
 
 **srafq** takes a list of SRA accessions (SRR/DRR/ERR), resolves metadata via ENA, and downloads the FASTQ files safely.
-It prefers **Aspera (ascp)** whenever available and falls back to **`fasterq-dump`**. HTTP/aria2 is intentionally **disabled** in this version.
+It prefers **Aspera (ascp)** whenever available and falls back to **`fasterq-dump`**.
 
 ## Install (conda)
 ```bash
