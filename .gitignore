@@ -6,3 +6,4 @@ data/
 *.fastq.gz
 .DS_Store
 Thumbs.db
+srafq.bak
