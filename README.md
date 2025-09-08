@@ -3,10 +3,27 @@
 **srafq** takes a list of SRA accessions (SRR/DRR/ERR), resolves metadata via ENA, and downloads the FASTQ files safely.
 It prefers **Aspera (ascp)** whenever available and falls back to **`fasterq-dump`**.
 
+## Why srafq? (Statement of need)
+In recent years, the use of deposited datasets from public archives has grown, while the per-run and per-project data volumes have increased dramatically. Consequently, faster and more reliable download pipelines are increasingly required to avoid bottlenecks in the early stages of analysis.
+
+Fetching public read archives (SRA/ENA) reproducibly at scale is often brittle:
+corporate firewalls may block Aspera (`ascp`), runs mix single/paired layouts,
+and interrupted transfers leave no clean way to resume. Existing one-liners or
+tooling typically require manual switching between `ascp` and `fasterq-dump`
+and provide little structure for large batches. **srafq** is a tiny, Linux-only
+Bash helper that makes this routine reliable and automatable: it uses Aspera
+when available and cleanly falls back to `fasterq-dump`, writes per-accession
+output directories, and records explicit failure/retry ledgers to resume long
+jobs deterministically. Configuration is via simple environment variables.
+Network transfers use Aspera when present; **HTTP is used only to query ENA
+metadata**. srafq targets bioinformatics users running on clusters or behind
+restricted networks who need a minimal, reproducible way to fetch FASTQ sets.
+
 ## Install (conda)
 ```bash
 # Create and activate an environment
-mamba create -n srafq -c conda-forge -c bioconda sra-tools pigz curl flock ||     conda  create -n srafq -c conda-forge -c bioconda sra-tools pigz curl flock
+mamba create -n srafq -c conda-forge -c bioconda sra-tools pigz curl flock \
+|| conda create -n srafq -c conda-forge -c bioconda sra-tools pigz curl flock
 conda activate srafq
 
 # Aspera CLI (includes ascp v3 and the DSA key)
