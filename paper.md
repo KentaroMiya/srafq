@@ -64,6 +64,10 @@ for edge cases (e.g., mixed layouts, controlled network environments).
 - **License**: MIT
 
 # Acknowledgements
-We thank the SRA/ENA teams and maintainers of sra-tools.
-
+We thank the SRA/ENA teams and the maintainers of sra-tools.
+We also acknowledge IBM Aspera for providing the `ascp` client implementing
+the FASP high-speed transfer protocol used by *srafq*. "Aspera" and "FASP"
+are trademarks of IBM. *srafq* is an independent open-source project and is
+not affiliated with or endorsed by IBM. Users should obtain and use `ascp`
+under its respective license.
 # References
