@@ -1,4 +1,4 @@
-# srafq 0.0.1 — Robust SRA/ENA FASTQ fetcher (Aspera‑first; `fasterq-dump` fallback)
+# srafq — Robust SRA/ENA FASTQ fetcher (Aspera‑first; `fasterq-dump` fallback)
 
 **srafq** takes a list of SRA accessions (SRR/DRR/ERR), resolves metadata via ENA, and downloads the FASTQ files safely.
 It prefers **Aspera (ascp)** whenever available and falls back to **`fasterq-dump`**.
