@@ -72,8 +72,8 @@ network access.
 # Performance evaluation (minimal)
 We evaluated end-to-end wall-clock time for representative runs on a typical institutional
 network in two conditions: (A) Aspera enabled and (B) Aspera disabled (`ASCP_BIN=none`,
-fallback to `fasterq-dump`). Each condition used `THREADS=2`, and results were averaged
-over 3 attempts.
+fallback to `fasterq-dump`). **Measurements reflect a single representative run with `THREADS=2`;**
+Aspera was rate-limited to `ASCP_LIMIT_M=150m`.
 
 | Accession     | Aspera (A) | Fallback (B) | Speed-up (A/B) |
 |---------------|------------|--------------|----------------|
@@ -84,11 +84,12 @@ over 3 attempts.
 ```bash
 # A) Aspera enabled
 export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
-ASCP_LIMIT_M=150m THREADS=2 /usr/bin/time -f '%E'   ./srafq -i SRR_List.txt -o data_ascp
+ASCP_LIMIT_M=150m THREADS=2 /usr/bin/time -f '%E' \
+  ./srafq -i SRR_List.txt -o data_ascp
 
 # B) Fallback (Aspera disabled)
-ASCP_BIN=none THREADS=2 /usr/bin/time -f '%E'   ./srafq -i SRR_List.txt -o data_fqdump
-```
+ASCP_BIN=none THREADS=2 /usr/bin/time -f '%E' \
+  ./srafq -i SRR_List.txt -o data_fqdump
 
 # Comparison to related tools
 Existing tooling either focuses on downstream processing (e.g., pipelines and QC/QA)
