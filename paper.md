@@ -91,6 +91,7 @@ ASCP_LIMIT_M=150m THREADS=2 /usr/bin/time -f '%E' \
 ASCP_BIN=none THREADS=2 /usr/bin/time -f '%E' \
   ./srafq -i SRR_List.txt -o data_fqdump
 
+```
 # Comparison to related tools
 Existing tooling either focuses on downstream processing (e.g., pipelines and QC/QA)
 or provides single-mode downloaders. *srafq* addresses the acquisition stage
