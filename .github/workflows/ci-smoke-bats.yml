@@ -1,0 +1,35 @@
+name: CI (smoke + bats)
+on:
+  push:
+    paths:
+      - 'srafq'
+      - 'tests/**'
+      - '.github/workflows/ci-smoke-bats.yml'
+  pull_request:
+    paths:
+      - 'srafq'
+      - 'tests/**'
+      - '.github/workflows/ci-smoke-bats.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Show bash version
+        run: bash --version
+      - name: Ensure script header is bash
+        run: head -n1 srafq | grep -q 'bash'
+      - name: Script prints help
+        run: bash ./srafq --help || true
+      - name: Script prints version
+        run: bash ./srafq --version || true
+
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run bats tests
+        run: bats tests
