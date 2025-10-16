@@ -13,7 +13,7 @@ authors:
 affiliations:
   - name: Research Department, R&D Division, Miyarisan Pharmaceutical Co., Ltd., Saitama, Japan
     index: 1
-date: 2025-09-08
+date: 2025-10-13
 bibliography: paper.bib
 ---
 
@@ -22,52 +22,91 @@ bibliography: paper.bib
 SRA/ENA using **Aspera (`ascp`) when available**, and cleanly falls back to
 `fasterq-dump` otherwise. It resolves run metadata via ENA over HTTP (metadata only),
 creates per-accession output directories, and records failures/retries for robust
-batch processing. The tool aims to reduce operational friction when preparing
-read sets for downstream analysis on clusters or corporate networks where Aspera
-may be blocked or intermittent.
+batch processing.
 
 # Statement of need
-Fetching public read archives reproducibly and at scale is still error-prone,
-owing to heterogeneous run layouts (single/paired), transient transfer errors,
-and environment constraints (e.g., firewall-constrained Aspera). *srafq*
-reduces the burden for practitioners who need a simple, automatable way to
-populate analysis workspaces with FASTQ files:
-
-1. **Aspera-first** transfers with **automatic fallback** to `fasterq-dump`.
-2. Layout-aware directory structure per accession (single/paired).
-3. Explicit **failure/retry ledgers** to resume long jobs deterministically.
-4. Simple configuration via environment variables; a single self-contained script.
+The use of deposited datasets from public archives has grown substantially, while
+per-run and per-project data volumes have increased dramatically. Consequently,
+**faster and more reliable download pipelines** are required to avoid bottlenecks
+in the early stages of analysis. Fetching public read archives reproducibly at scale
+is often brittle: corporate firewalls may block Aspera (`ascp`), runs mix single/paired
+layouts, and interrupted transfers leave no clean way to resume. **srafq** addresses
+this acquisition stage specifically with an Aspera-first strategy, clean fallback to
+`fasterq-dump`, per-accession output directories, and explicit failure/retry ledgers.
 
 # Functionality
-- Detects Aspera (`ascp`) + private key and uses it when present; otherwise runs `fasterq-dump`.
-- Resolves run metadata through ENA's HTTP API (metadata only).
+- Aspera-first transfers with automatic fallback to `fasterq-dump`.
+- Resolves run metadata via the ENA HTTP API (metadata only) [@ena_portal].
 - Writes outputs under `OUTDIR/<accession>/` with `_1/_2` naming for paired-end runs.
 - Records failures in `data/srafq.failed.tsv` and a retry list at `data/srafq.retry.txt`.
-- Includes ShellCheck-cleaned code and CI linting.
+- Minimal dependencies; Linux/Bash ≥ 4 only; optional `ascp` [@aspera_fasp], and `sra-tools` [@sra_tools].
 
-Example:
-```bash
-export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
-ASCP_LIMIT_M=150m THREADS=8 ./srafq -i SRR_List.txt -o data
-```
+# Implementation and design
+*srafq* is a single Bash script that prioritizes IBM Aspera `ascp` transfers and falls
+back to `fasterq-dump` in a failure-tolerant manner. The script (i) resolves run metadata
+via ENA over HTTP (metadata only), (ii) infers single/paired layout and creates
+per-accession directories, and (iii) maintains explicit failure (`srafq.failed.tsv`)
+and retry (`srafq.retry.txt`) ledgers to enable deterministic resumption.
+
+**Transfer logic.** When `ascp` and its private key are available, *srafq* uses
+`ascp -QT -k1 -P 33001` with an optional rate cap (`ASCP_LIMIT_M`) and key (`ASCP_KEY`).
+On `ascp` error or in constrained networks, the script falls back to `fasterq-dump` with
+user-configurable threads and optional `--skip-technical`. This design targets
+high-latency environments where Aspera improves throughput but may be blocked
+or intermittent.
+
+**Configuration.** Behavior is controlled by environment variables (e.g., `THREADS`,
+`ASCP_BIN`, `ASCP_KEY`, `ASCP_LIMIT_M`, `RESUME_MODE`, `LAYOUT_MODE`, `SKIP_TECHNICAL`).
+Defaults are conservative, and the tool is Linux-only by design to keep dependencies minimal.
+
+**Failure handling.** Each attempt is recorded; failures append one tab-separated line to
+`srafq.failed.tsv`, and accessions are added to `srafq.retry.txt` for reproducible reruns.
+A finalize step removes the ledger if no failures remain.
 
 # Quality control
 We provide continuous integration that runs ShellCheck over the script and a
 smoke job ensuring `--help` and `--version` execute on each push/PR.
-The repository contains example command lines and a small `SRR_List.txt` for
-manual dry-runs. Users are encouraged to report issues and contribute tests
-for edge cases (e.g., mixed layouts, controlled network environments).
+Additionally, a tiny **Bats** test verifies these entry points without requiring
+network access.
+
+# Performance evaluation (minimal)
+We evaluated end-to-end wall-clock time for representative runs on a typical institutional
+network in two conditions: (A) Aspera enabled and (B) Aspera disabled (`ASCP_BIN=none`,
+fallback to `fasterq-dump`). Each condition used `THREADS=8`, and results were averaged
+over 3 attempts.
+
+| Accession     | Aspera (A) | Fallback (B) | Speed-up (A/B) |
+|---------------|------------|--------------|----------------|
+| SRR10479824   | 00:28:02   | 03:22:07     | ×7.21          |
+| SRR10479825   | 00:29:59   | 03:54:29     | ×7.82          |
+
+**Reproduction.** Example commands:
+```bash
+# A) Aspera enabled
+export ASCP_KEY="$CONDA_PREFIX/etc/asperaweb_id_dsa.openssh"
+ASCP_LIMIT_M=150m THREADS=8 /usr/bin/time -f '%E'   ./srafq -i SRR_List.txt -o data_ascp
+
+# B) Fallback (Aspera disabled)
+ASCP_BIN=none THREADS=8 /usr/bin/time -f '%E'   ./srafq -i SRR_List.txt -o data_fqdump
+```
+
+# Comparison to related tools
+Existing tooling either focuses on downstream processing (e.g., pipelines and QC/QA)
+or provides single-mode downloaders. *srafq* addresses the acquisition stage
+specifically with (i) an Aspera-first, fallback-safe strategy, (ii) layout-aware
+output structuring, and (iii) explicit resume ledgers in a minimal Bash-only footprint.
+This complements, rather than replaces, downstream analysis pipelines.
 
 # Availability
 - **Source code**: https://github.com/KentaroMiya/srafq
-- **Archive/DOI**: 10.5281/zenodo.17067028  (versioned release archived on Zenodo; corresponding to v0.0.1)
+- **Archive/DOI**: 10.5281/zenodo.17067028 (versioned release archived on Zenodo; corresponding to v0.0.1)
 - **License**: MIT
 
 # Acknowledgements
-We thank the SRA/ENA teams and the maintainers of sra-tools.
-We also acknowledge IBM Aspera for providing the `ascp` client implementing
-the FASP high-speed transfer protocol used by *srafq*. "Aspera" and "FASP"
-are trademarks of IBM. *srafq* is an independent open-source project and is
-not affiliated with or endorsed by IBM. Users should obtain and use `ascp`
-under its respective license.
+We thank the SRA/ENA teams and the maintainers of sra-tools. We also acknowledge
+IBM Aspera for providing the `ascp` client implementing the FASP high-speed transfer
+protocol used by *srafq*. "Aspera" and "FASP" are trademarks of IBM. *srafq* is an
+independent open-source project and is not affiliated with or endorsed by IBM.
+Users should obtain and use `ascp` under its respective license.
+
 # References
