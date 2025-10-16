@@ -1,16 +1,30 @@
 name: Build JOSS paper
 on:
   push:
-    paths: [paper.md, paper.bib, .github/workflows/joss-paper.yml]
-  pull_request:
-    paths: [paper.md, paper.bib, .github/workflows/joss-paper.yml]
+    paths:
+      - paper.md
+      - paper.bib
+      - .github/workflows/joss-paper.yml
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # 安定のため checkout はコミットSHA固定（v4.2.2）
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
       - name: Build draft PDF (JOSS)
-        uses: openjournals/openjournals-draft-action@v3
+        # ↓ ここを修正（v3 → v1.0 か、もしくは master）
+        uses: openjournals/openjournals-draft-action@v1.0
         with:
           journal: joss
           paper-path: paper.md
+
+      - name: Upload PDF artifact
+        # v4 系を使用（v3は2025-01-30で廃止） 
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper
+          path: paper.pdf
+
